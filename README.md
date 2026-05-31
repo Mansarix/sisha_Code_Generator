@@ -15,7 +15,7 @@
 
 ## ✨ Overview
 
-**Sisha CRUD Generator** is a lightweight yet powerful T4-based code generator that automatically scaffolds a complete Admin Panel and CRUD architecture from your existing domain models.
+**Sisha Code Generator** is a lightweight yet powerful T4-based code generator that automatically scaffolds a complete Admin Panel and CRUD architecture from your existing domain models.
 
 It eliminates repetitive boilerplate code and helps you rapidly build structured ASP.NET Core applications.
 
