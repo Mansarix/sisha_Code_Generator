@@ -1,0 +1,283 @@
+<#@ template language="C#" hostspecific="true" debug="false" #>
+<#@ assembly name="System.Core" #>
+<#@ assembly name="System.Xml" #>
+<#@ assembly name="System.Xml.Linq" #>
+<#@ output extension=".txt" #>
+
+<#@ import namespace="System" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Xml.Linq" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.Linq" #>
+
+<#
+string projectNamespace = "SishaTenant.Backoffice";
+
+string templateDir = Path.GetDirectoryName(Host.TemplateFile);
+string root = templateDir;
+
+while(!Directory.Exists(Path.Combine(root,"Models")))
+{
+    root = Directory.GetParent(root).FullName;
+}
+
+string views = Path.Combine(root,"Views");
+string sharedViews = Path.Combine(root,"Views", "Shared");
+string homeViews = Path.Combine(root,"Views", "Home");
+string controllers = Path.Combine(root,"Controllers");
+
+Directory.CreateDirectory(sharedViews);
+Directory.CreateDirectory(homeViews);
+
+// 1. خواندن فایل کانفیگ XML
+string configPath = Path.Combine(root, "admin-config.xml");
+var menuHtml = new System.Text.StringBuilder();
+
+if(File.Exists(configPath))
+{
+    XDocument doc = XDocument.Load(configPath);
+    var menus = doc.Descendants("Menu");
+    
+    foreach(var menu in menus)
+    {
+        string title = menu.Attribute("Title")?.Value;
+        string url = menu.Attribute("Url")?.Value;
+        string icon = menu.Attribute("Icon")?.Value;
+        
+        menuHtml.AppendLine($@"
+        <li class=""nav-item mb-2"">
+            <a href=""{url}"" class=""nav-link text-white hover-overlay d-flex align-items-center"">
+                <span class=""fs-5 me-2"">{icon}</span>
+                {title}
+            </a>
+        </li>");
+    }
+}
+
+// 2. ساخت فایل _Layout.cshtml
+var layoutCode = $@"
+<!DOCTYPE html>
+<html lang=""fa"" dir=""rtl"">
+<head>
+    <meta charset=""utf-8"" />
+    <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"" />
+    <title>@ViewData[""Title""] - پنل مدیریت</title>
+    <!-- استفاده از فایل‌های لوکال پروژه -->
+    <link rel=""stylesheet"" href=""~/lib/bootstrap/dist/css/bootstrap.rtl.min.css"" />
+    <link rel=""stylesheet"" href=""~/css/site.css"" asp-append-version=""true"" />
+    <style>
+        body {{ font-family: Tahoma, Arial, sans-serif; background-color: #f8f9fa; overflow-x: hidden; }}
+        
+        /* Sidebar Styles */
+        .sidebar {{
+            position: fixed;
+            top: 0; bottom: 0; right: 0;
+            width: 280px;
+            background: #212529; color: white;
+            transition: right 0.3s ease-in-out;
+            z-index: 1040;
+            overflow-y: auto;
+        }}
+        .hover-overlay {{ border-radius: 8px; transition: 0.2s; }}
+        .hover-overlay:hover {{ background: rgba(255,255,255,0.1); padding-right: 15px; }}
+        
+        /* Content Area */
+        .content-area {{
+            margin-right: 280px;
+            min-height: 100vh;
+            transition: margin-right 0.3s ease-in-out;
+        }}
+        .top-navbar {{ background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.04); }}
+        
+        /* Mobile Overlay */
+        .sidebar-overlay {{
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1030;
+            display: none;
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+        }}
+
+        .dropdown-toggle::after {{display:none;}}
+
+        /* Responsive Mobile */
+        @@media (max-width: 768px) {{
+            .sidebar {{ right: -280px; }}
+            .content-area {{ margin-right: 0; }}
+            
+            /* Toggled State */
+            body.sidebar-open .sidebar {{ right: 0; }}
+            body.sidebar-open .sidebar-overlay {{ display: block; opacity: 1; }}
+        }}
+        
+        /* Custom Avatar */
+        .avatar-circle {{ width: 40px; height: 40px; border-radius: 50%; background-color: #e9ecef; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; }}
+    </style>
+</head>
+<body>
+
+    <!-- Mobile Overlay -->
+    <div class=""sidebar-overlay"" onclick=""toggleSidebar()""></div>
+
+    <!-- Sidebar -->
+    <div class=""sidebar p-3 shadow-lg"">
+        <div class=""d-flex justify-content-between align-items-center mb-3 border-bottom pb-3 border-secondary"">
+            <a href=""/"" class=""text-white text-decoration-none d-flex align-items-center"">
+                <span class=""fs-3 me-2"">📦</span>
+                <span class=""fs-5 fw-bold"">مدیریت سیستم</span>
+            </a>
+            <!-- Close button for mobile -->
+            <button class=""btn text-white d-md-none"" onclick=""toggleSidebar()"">❌</button>
+        </div>
+        <ul class=""nav nav-pills flex-column mb-auto mt-4"">
+            {menuHtml.ToString()}
+        </ul>
+    </div>
+
+    <!-- Main Content -->
+    <div class=""content-area d-flex flex-column h-100"">
+        <!-- Top Navbar -->
+        <header class=""top-navbar p-3 d-flex justify-content-between align-items-center"">
+            <div class=""d-flex align-items-center"">
+                <!-- Hamburger Menu Button -->
+                <button class=""btn btn-light d-md-none me-3 shadow-sm"" onclick=""toggleSidebar()"">
+                    <span>☰</span>
+                </button>
+                <h5 class=""mb-0 text-muted"">@ViewData[""Title""]</h5>
+            </div>
+            
+            <div class=""dropdown"">
+                <a href=""#"" class=""d-flex align-items-center text-dark text-decoration-none dropdown-toggle"" data-bs-toggle=""dropdown"">
+                    <div class=""avatar-circle me-2 shadow-sm"">👤</div>
+                </a>
+                <ul class=""dropdown-menu dropdown-menu-end shadow"">
+                    <li><a class=""dropdown-item"" href=""/Home/Profile""><span class=""me-2"">👤</span>پروفایل من</a></li>
+                    <li><hr class=""dropdown-divider""></li>
+                    <li><a class=""dropdown-item text-danger"" href=""#""><span class=""me-2"">🚪</span>خروج</a></li>
+                </ul>
+            </div>
+        </header>
+
+        <!-- Render Body -->
+        <main class=""p-4"">
+            @RenderBody()
+        </main>
+    </div>
+
+    <!-- استفاده از فایل‌های لوکال پروژه -->
+    <script src=""~/lib/jquery/dist/jquery.min.js""></script>
+    <script src=""~/lib/bootstrap/dist/js/bootstrap.bundle.min.js""></script>
+    <script src=""~/js/site.js"" asp-append-version=""true""></script>
+    
+    <script>
+        function toggleSidebar() {{
+            document.body.classList.toggle('sidebar-open');
+        }}
+    </script>
+    
+    @await RenderSectionAsync(""Scripts"", required: false)
+</body>
+</html>
+";
+File.WriteAllText(Path.Combine(sharedViews, "_Layout.cshtml"), layoutCode);
+
+// 3. ساخت کنترلر Home
+var homeControllerCode = $@"
+using Microsoft.AspNetCore.Mvc;
+
+namespace {projectNamespace}.Controllers
+{{
+    public class HomeController : Controller
+    {{
+        public IActionResult Index()
+        {{
+            return View();
+        }}
+
+        public IActionResult Profile()
+        {{
+            return View();
+        }}
+    }}
+}}
+";
+File.WriteAllText(Path.Combine(controllers, "HomeController.cs"), homeControllerCode);
+
+// 4. ساخت ویو داشبورد (Index)
+var dashboardCode = $@"
+@{{
+    ViewData[""Title""] = ""داشبورد"";
+}}
+
+<div class=""row g-4"">
+    <div class=""col-md-3"">
+        <div class=""card bg-primary text-white shadow border-0 rounded-4"">
+            <div class=""card-body py-4"">
+                <h6 class=""card-title""><span class=""me-2 fs-5"">📈</span>بازدید امروز</h6>
+                <h2 class=""mb-0 fw-bold mt-3"">۱,۲۸۴</h2>
+            </div>
+        </div>
+    </div>
+    <div class=""col-md-3"">
+        <div class=""card bg-success text-white shadow border-0 rounded-4"">
+            <div class=""card-body py-4"">
+                <h6 class=""card-title""><span class=""me-2 fs-5"">✅</span>رکوردهای فعال</h6>
+                <h2 class=""mb-0 fw-bold mt-3"">۴۵۰</h2>
+            </div>
+        </div>
+    </div>
+    <div class=""col-md-6"">
+        <div class=""card shadow-sm border-0 rounded-4 h-100"">
+            <div class=""card-body"">
+                <h5 class=""card-title text-muted"">خوش آمدید 👋</h5>
+                <p class=""card-text mt-3"">شما در حال مشاهده داشبورد مدیریت هستید. از منوی سمت راست برای مدیریت بخش‌های مختلف سیستم استفاده کنید.</p>
+            </div>
+        </div>
+    </div>
+</div>
+";
+File.WriteAllText(Path.Combine(homeViews, "Index.cshtml"), dashboardCode);
+
+// 5. ساخت ویو پروفایل
+var profileCode = $@"
+@{{
+    ViewData[""Title""] = ""پروفایل کاربری"";
+}}
+
+<div class=""row justify-content-center"">
+    <div class=""col-md-8"">
+        <div class=""card shadow-sm border-0 rounded-4"">
+            <div class=""card-header bg-white border-bottom p-4"">
+                <h5 class=""mb-0 fw-bold""><span class=""me-2"">🪪</span>اطلاعات حساب کاربری</h5>
+            </div>
+            <div class=""card-body p-4"">
+                <div class=""text-center mb-4"">
+                    <div class=""mx-auto mb-3 shadow rounded-circle bg-light d-flex align-items-center justify-content-center"" style=""width: 120px; height: 120px; font-size: 4rem;"">
+                        👤
+                    </div>
+                    <h5 class=""fw-bold"">ادمین سیستم</h5>
+                    <span class=""badge bg-primary"">مدیر کل</span>
+                </div>
+                
+                <form>
+                    <div class=""row g-3"">
+                        <div class=""col-md-6"">
+                            <label class=""form-label"">نام و نام خانوادگی</label>
+                            <input type=""text"" class=""form-control"" value=""ادمین سیستم"" readonly>
+                        </div>
+                        <div class=""col-md-6"">
+                            <label class=""form-label"">ایمیل</label>
+                            <input type=""email"" class=""form-control"" value=""admin@sisha.com"" readonly>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+";
+File.WriteAllText(Path.Combine(homeViews, "Profile.cshtml"), profileCode);
+
+#>
+تولید فایل‌های قالب، کنترلر Home، داشبورد و پروفایل با موفقیت انجام شد!
