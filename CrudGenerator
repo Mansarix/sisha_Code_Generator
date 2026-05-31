@@ -1,0 +1,845 @@
+<#@ assembly name="System.Core" #>
+<#@ template language="C#" hostspecific="true" debug="false" #>
+<#@ output extension=".txt" #>
+
+<#@ import namespace="System" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Text.RegularExpressions" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.Linq" #>
+
+<#
+
+string projectNamespace = "SishaTenant.Backoffice";
+string dataProjectNamespace = "SishaTenantData.Data";
+string modelProjectNamespace = "SishaTenantData.Models";
+string serviceProjectNamespace = "SishaTenantData.Models";
+var generatedModels = new List<string>();
+
+
+string templateDir = Path.GetDirectoryName(Host.TemplateFile);
+string root = templateDir;
+
+while(!Directory.Exists(Path.Combine(root,"Models")))
+{
+    root = Directory.GetParent(root).FullName;
+}
+
+string models = Path.Combine(root,"Models");
+string controllers = Path.Combine(root,"Controllers");
+string api = Path.Combine(root,"ApiControllers");
+string services = Path.Combine(root,"Services");
+string repos = Path.Combine(root,"Repositories");
+string views = Path.Combine(root,"Views");
+string dtos = Path.Combine(root,"DTOs");
+string mappings = Path.Combine(root,"Mappings");
+string helpers = Path.Combine(root,"Helpers"); 
+
+Directory.CreateDirectory(controllers);
+Directory.CreateDirectory(api);
+Directory.CreateDirectory(services);
+Directory.CreateDirectory(repos);
+Directory.CreateDirectory(views);
+Directory.CreateDirectory(dtos);
+Directory.CreateDirectory(mappings);
+Directory.CreateDirectory(helpers);
+
+var persianDateHelper = $@"
+using System;
+using System.Globalization;
+
+namespace {projectNamespace}.Helpers
+{{
+    public static class PersianDateExtensions
+    {{
+        public static string ToShamsi(this DateTime dt)
+        {{
+            var pc = new PersianCalendar();
+            return $""{{pc.GetYear(dt):0000}}/{{pc.GetMonth(dt):00}}/{{pc.GetDayOfMonth(dt):00}}"";
+        }}
+
+        public static string ToShamsi(this DateTime? dt)
+        {{
+            return dt.HasValue ? dt.Value.ToShamsi() : ""-"";
+        }}
+    }}
+}}
+";
+File.WriteAllText(Path.Combine(helpers, "PersianDateExtensions.cs"), persianDateHelper);
+
+string[] files = Directory.GetFiles(models,"*.cs");
+
+var di = new StringBuilder();
+
+foreach(string f in files)
+{
+
+string model = Path.GetFileNameWithoutExtension(f);
+string code = File.ReadAllText(f);
+
+generatedModels.Add(model);
+
+var matches = Regex.Matches(
+    code,
+    @"public\s+([A-Za-z0-9_<>\?\[\]]+)\s+([A-Za-z0-9_]+)\s*\{\s*get;\s*set;"
+);
+
+var props = new List<(string Type,string Name)>();
+
+foreach(Match m in matches)
+{
+    string t = m.Groups[1].Value;
+    string n = m.Groups[2].Value;
+
+    if(n=="Id") continue;
+
+    props.Add((t,n));
+}
+
+Directory.CreateDirectory(Path.Combine(views,model));
+
+var dto = new StringBuilder();
+
+dto.AppendLine($"using {modelProjectNamespace};");
+dto.AppendLine($"namespace {projectNamespace}.DTOs");
+dto.AppendLine("{");
+dto.AppendLine($"    public class {model}Dto");
+dto.AppendLine("    {");
+dto.AppendLine("        public int Id {get;set;}");
+foreach(var p in props)
+    dto.AppendLine($"        public {p.Type} {p.Name} {{get;set;}}");
+dto.AppendLine("    }");
+dto.AppendLine("}");
+
+File.WriteAllText(Path.Combine(dtos,$"{model}Dto.cs"),dto.ToString());
+
+var map = $@"
+using AutoMapper;
+using {projectNamespace}.Models;
+using {projectNamespace}.DTOs;
+
+namespace {projectNamespace}.Mappings
+{{
+    public class {model}Profile : Profile
+    {{
+        public {model}Profile()
+        {{
+            CreateMap<{model}, {model}Dto>();
+            CreateMap<{model}Dto, {model}>();
+        }}
+    }}
+}}
+";
+File.WriteAllText(Path.Combine(mappings,$"{model}Profile.cs"),map);
+
+
+var repo = $@"
+using {dataProjectNamespace};
+using {modelProjectNamespace};
+using System.Linq;
+
+namespace {projectNamespace}.Repositories
+{{
+    public interface I{model}Repository
+    {{
+        IQueryable<{model}> Query();
+        {model} Get(int id);
+        void Add({model} entity);
+        void Update({model} entity);
+        void Delete({model} entity);
+    }}
+}}
+";
+File.WriteAllText(Path.Combine(repos,$"I{model}Repository.cs"),repo);
+
+
+var repoImpl = $@"
+using {dataProjectNamespace};
+using {modelProjectNamespace};
+using Microsoft.EntityFrameworkCore;
+using System.Linq;
+
+namespace {projectNamespace}.Repositories
+{{
+    public class {model}Repository : I{model}Repository
+    {{
+        private readonly AppDbContext _context;
+
+        public {model}Repository(AppDbContext context)
+        {{
+            _context = context;
+        }}
+
+        public IQueryable<{model}> Query()
+        {{
+            return _context.Set<{model}>();
+        }}
+
+        public {model} Get(int id)
+        {{
+            return _context.Set<{model}>().FirstOrDefault(x => x.Id == id);
+        }}
+
+        public void Add({model} entity)
+        {{
+            _context.Set<{model}>().Add(entity);
+            _context.SaveChanges();
+        }}
+
+        public void Update({model} entity)
+        {{
+            _context.Set<{model}>().Update(entity);
+            _context.SaveChanges();
+        }}
+
+        public void Delete({model} entity)
+        {{
+            _context.Set<{model}>().Remove(entity);
+            _context.SaveChanges();
+        }}
+    }}
+}}
+";
+File.WriteAllText(Path.Combine(repos,$"{model}Repository.cs"),repoImpl);
+
+
+var service = $@"
+using {dataProjectNamespace};
+using {modelProjectNamespace};
+using {projectNamespace}.Repositories;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace {projectNamespace}.Services
+{{
+    public interface I{model}Service
+    {{
+        List<{model}> GetAll();
+        {model} GetById(int id);
+        void Add({model} entity);
+        void Update({model} entity);
+        void Delete(int id);
+    }}
+
+    public class {model}Service : I{model}Service
+    {{
+        private readonly I{model}Repository _repo;
+
+        public {model}Service(I{model}Repository repo)
+        {{
+            _repo = repo;
+        }}
+
+        public List<{model}> GetAll()
+        {{
+            return _repo.Query().ToList();
+        }}
+
+        public {model} GetById(int id)
+        {{
+            return _repo.Get(id);
+        }}
+
+        public void Add({model} entity)
+        {{
+            entity.CreatedAt = DateTime.Now;
+            _repo.Add(entity);
+        }}
+
+        public void Update({model} entity)
+        {{
+            entity.UpdatedAt = DateTime.Now;
+            _repo.Update(entity);
+        }}
+
+        public void Delete(int id)
+        {{
+            var entity = _repo.Get(id);
+            if(entity != null)
+            {{
+                entity.IsDeleted = true; 
+                _repo.Update(entity);
+            }}
+        }}
+    }}
+}}
+";
+File.WriteAllText(Path.Combine(services,$"{model}Service.cs"),service);
+
+
+var stringProps = props.Where(p => p.Type == "string" || p.Type == "string?").ToList();
+string searchCondition = "x.Id.ToString() == search"; 
+if (stringProps.Any())
+{
+    searchCondition = string.Join(" || ", stringProps.Select(p => $"(x.{p.Name} != null && x.{p.Name}.Contains(search, StringComparison.OrdinalIgnoreCase))"));
+}
+
+var controller = $@"
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Http;
+using {dataProjectNamespace};
+using {modelProjectNamespace};
+using {projectNamespace}.Services;
+using System;
+using System.IO;
+using System.Linq;
+
+namespace {projectNamespace}.Controllers
+{{
+    public class {model}Controller : Controller
+    {{
+        private readonly I{model}Service _service;
+
+        public {model}Controller(I{model}Service service)
+        {{
+            _service = service;
+        }}
+
+        public IActionResult Index(string search, int page = 1)
+        {{
+            int pageSize = 10;
+            var data = _service.GetAll().AsEnumerable();
+
+            if(!string.IsNullOrEmpty(search))
+                data = data.Where(x => {searchCondition});
+
+            int totalItems = data.Count();
+            int totalPages = (int)Math.Ceiling(totalItems / (double)pageSize);
+            
+            ViewBag.CurrentPage = page;
+            ViewBag.TotalPages = totalPages;
+            ViewBag.Search = search;
+
+            var pagedData = data.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+            return View(pagedData);
+        }}
+
+        public IActionResult Details(int id)
+        {{
+            var data = _service.GetById(id);
+            if (data == null) return NotFound();
+            return View(data);
+        }}
+
+        public IActionResult Create()
+        {{
+            return View();
+        }}
+
+        [HttpPost]
+        public IActionResult Create({model} model)
+        {{
+            if(ModelState.IsValid)
+            {{
+                _service.Add(model);
+                return RedirectToAction(""Index"");
+            }}
+            return View(model);
+        }}
+
+        public IActionResult Edit(int id)
+        {{
+            var data = _service.GetById(id);
+            if (data == null) return NotFound();
+            return View(data);
+        }}
+
+        [HttpPost]
+        public IActionResult Edit({model} model)
+        {{
+            _service.Update(model);
+            return RedirectToAction(""Index"");
+        }}
+
+        public IActionResult Delete(int id)
+        {{
+            var data = _service.GetById(id);
+            if (data == null) return NotFound();
+            return View(data);
+        }}
+
+        [HttpPost, ActionName(""DeleteConfirmed"")]
+        public IActionResult DeleteConfirmed(int id)
+        {{
+            _service.Delete(id);
+            return RedirectToAction(""Index"");
+        }}
+
+        public IActionResult ImportCsv()
+        {{
+            return View();
+        }}
+
+        [HttpPost]
+        public IActionResult ImportCsv(IFormFile file)
+        {{
+            if (file != null && file.Length > 0)
+            {{
+                using (var stream = file.OpenReadStream())
+                using (var reader = new StreamReader(stream))
+                {{
+                    var headerLine = reader.ReadLine();
+                    if (headerLine != null)
+                    {{
+                        var headers = headerLine.Split(',').Select(h => h.Trim()).ToArray();
+                        while (!reader.EndOfStream)
+                        {{
+                            var line = reader.ReadLine();
+                            if (string.IsNullOrWhiteSpace(line)) continue;
+                            
+                            var values = line.Split(',');
+                            var entity = new {model}();
+                            
+                            for (int i = 0; i < headers.Length && i < values.Length; i++)
+                            {{
+                                var prop = typeof({model}).GetProperty(headers[i], System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                                if (prop != null && prop.CanWrite && headers[i].ToLower() != ""id"")
+                                {{
+                                    try 
+                                    {{
+                                        var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+                                        var convertedValue = Convert.ChangeType(values[i].Trim(), targetType);
+                                        prop.SetValue(entity, convertedValue);
+                                    }} 
+                                    catch {{ /* خطا نادیده گرفته میشود */ }}
+                                }}
+                            }}
+                            _service.Add(entity);
+                        }}
+                    }}
+                }}
+                return RedirectToAction(""Index"");
+            }}
+            ModelState.AddModelError("""", ""لطفا یک فایل معتبر انتخاب کنید."");
+            return View();
+        }}
+    }}
+}}
+";
+File.WriteAllText(Path.Combine(controllers,$"{model}Controller.cs"),controller);
+
+
+var apiController = $@"
+using Microsoft.AspNetCore.Mvc;
+using {dataProjectNamespace};
+using {modelProjectNamespace};
+using {projectNamespace}.Services;
+
+namespace {projectNamespace}.ApiControllers
+{{
+    [ApiController]
+    [Route(""api/[controller]"")]
+    public class {model}ApiController : ControllerBase
+    {{
+        private readonly I{model}Service _service;
+
+        public {model}ApiController(I{model}Service service)
+        {{
+            _service = service;
+        }}
+
+        [HttpGet]
+        public IActionResult Get()
+        {{
+            return Ok(_service.GetAll());
+        }}
+
+        [HttpPost]
+        public IActionResult Post({model} model)
+        {{
+            _service.Add(model);
+            return Ok();
+        }}
+    }}
+}}
+";
+File.WriteAllText(Path.Combine(api,$"{model}ApiController.cs"),apiController);
+
+
+string headers="";
+string cells="";
+string details="";
+string inputs="";
+
+int visibleCount = 0;
+
+bool hasIsDeleted = props.Any(p => p.Name == "IsDeleted");
+bool hasIsActive = props.Any(p => p.Name == "IsActive");
+
+string trClassLogic = "";
+if (hasIsDeleted && hasIsActive) {
+    trClassLogic = "@(item.IsDeleted || !item.IsActive ? \"table-danger\" : \"\")";
+} else if (hasIsDeleted) {
+    trClassLogic = "@(item.IsDeleted ? \"table-danger\" : \"\")";
+} else if (hasIsActive) {
+    trClassLogic = "@(!item.IsActive ? \"table-danger\" : \"\")";
+}
+
+foreach(var p in props)
+{
+    string cellContent = $"@item.{p.Name}";
+    string detailsContent = $"@Model.{p.Name}";
+
+    if(p.Type.Contains("DateTime")) 
+    {
+        cellContent = $"@item.{p.Name}.ToShamsi()";
+        detailsContent = $"@Model.{p.Name}.ToShamsi()";
+    }
+    else if (p.Type.Contains("bool"))
+    {
+        cellContent = $"@(item.{p.Name} ? Html.Raw(\"<span class='badge bg-success shadow-sm'>بله</span>\") : Html.Raw(\"<span class='badge bg-danger shadow-sm'>خیر</span>\"))";
+        detailsContent = $"@(Model.{p.Name} ? \"بله\" : \"خیر\")";
+    }
+    else if (p.Name.EndsWith("Id") && p.Name != "Id") // کلید خارجی
+    {
+        string navProp = p.Name.Substring(0, p.Name.Length - 2);
+        // جایگزینی کلید خارجی با Title یا Name از طریق رفلکشن در ویو
+        cellContent = $"@(item.{navProp} != null ? (item.{navProp}.GetType().GetProperty(\"Title\")?.GetValue(item.{navProp})?.ToString() ?? item.{navProp}.GetType().GetProperty(\"Name\")?.GetValue(item.{navProp})?.ToString() ?? item.{p.Name}.ToString()) : item.{p.Name}.ToString())";
+    }
+    else if (p.Name.Contains("Status") || p.Name.Contains("وضعیت")) // بج رنگی برای وضعیت
+    {
+        cellContent = $"<span class=\"badge @((item.{p.Name}?.ToString() ?? \"\").Contains(\"فعال\") || (item.{p.Name}?.ToString() == \"1\") ? \"bg-success\" : (item.{p.Name}?.ToString() == \"0\" ? \"bg-secondary\" : \"bg-info\")) shadow-sm\">@item.{p.Name}</span>";
+    }
+
+    if(visibleCount < 5 && p.Name != "IsDeleted" && p.Name != "IsActive") // نمایش تا ۵ ستون
+    {
+        headers += $"<th>{p.Name}</th>";
+        cells += $"<td>{cellContent}</td>";
+        visibleCount++;
+    }
+
+    details += $@"
+    <div class=""col-md-6 mb-3"">
+        <div class=""p-3 border rounded bg-light hover-effect"">
+            <small class=""text-muted d-block mb-1"">{p.Name}</small>
+            <strong class=""fs-6"">{detailsContent}</strong>
+        </div>
+    </div>";
+
+    string type="text";
+    if(p.Type.Contains("DateTime")) type="date";
+    if(p.Type.Contains("int") || p.Type.Contains("decimal") || p.Type.Contains("double") || p.Type.Contains("float")) type="number";
+    if(p.Type.Contains("bool")) type="checkbox";
+
+    if(type == "checkbox")
+    {
+        inputs += $@"
+        <div class=""form-check form-switch mb-4"">
+            <input asp-for=""{p.Name}"" type=""checkbox"" class=""form-check-input"" role=""switch"" />
+            <label class=""form-check-label"">{p.Name}</label>
+        </div>";
+    }
+    else
+    {
+        inputs += $@"
+        <div class=""form-floating mb-3"">
+            <input asp-for=""{p.Name}"" type=""{type}"" class=""form-control"" placeholder=""{p.Name}"" />
+            <label>{p.Name}</label>
+        </div>";
+    }
+}
+
+string commonStyles = @"
+<style>
+    .hover-effect { transition: all 0.3s ease; }
+    .hover-effect:hover { transform: translateY(-3px); box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important; }
+    .table-hover tbody tr { transition: all 0.2s ease; }
+    .table-hover tbody tr:hover { transform: scale(1.005); box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+    .btn { border-radius: 8px; transition: all 0.2s ease; }
+    .btn:hover { transform: translateY(-1px); }
+    .card { border: none; border-radius: 12px; }
+</style>
+";
+
+var index = $@"
+@using {modelProjectNamespace}
+@using {projectNamespace}.Helpers
+@model IEnumerable<{model}>
+
+{commonStyles}
+
+<div class=""container py-4"" dir=""rtl"">
+
+    <div class=""d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3"">
+        <h4 class=""text-primary fw-bold mb-0"">مدیریت {model}</h4>
+        <div class=""d-flex gap-2"">
+            <a class=""btn btn-outline-secondary"" href=""/{model}/ImportCsv"">
+                <i class=""bi bi-file-earmark-spreadsheet""></i> ایمپورت
+            </a>
+            <a class=""btn btn-primary shadow-sm"" href=""/{model}/Create"">
+                <i class=""bi bi-plus-circle""></i> جدید
+            </a>
+        </div>
+    </div>
+
+    <div class=""card shadow mb-4"">
+        <div class=""card-body"">
+            <form method=""get"" class=""mb-0 w-100"">
+                <div class=""row g-2 align-items-center w-100"">
+                    <div class=""col-md-9 col-12"">
+                        <input name=""search"" class=""form-control bg-light border-0 w-100 px-3"" placeholder=""جستجو و فیلتر..."" value=""@ViewBag.Search"" style=""border-radius: 15px; height: 50px;"" />
+                    </div>
+                    <div class=""col-md-3 col-12 d-grid"">
+                        <button style=""border-radius: 15px; height: 50px;"" type=""submit"" class=""btn btn-dark"">اعمال جستجو</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class=""card shadow-sm"">
+        <div class=""card-body p-0"">
+            <div class=""table-responsive"">
+                <table class=""table table-hover table-borderless align-middle mb-0"">
+                    <thead class=""table-light text-secondary"">
+                        <tr>
+                            {headers}
+                            <th style=""width:200px"" class=""text-center"">عملیات</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if(!Model.Any())
+                        {{
+                            <tr>
+                                <td colspan=""{visibleCount + 1}"" class=""text-center py-4 text-muted"">رکوردی یافت نشد.</td>
+                            </tr>
+                        }}
+                        @foreach(var item in Model)
+                        {{
+                            <tr class=""{trClassLogic}"">
+                                {cells}
+                                <td class=""text-center"">
+                                    <div class=""d-flex gap-1 justify-content-center"">
+                                        <a class=""btn btn-sm btn-info text-white shadow-sm"" href=""/{model}/Details/@item.Id"">جزئیات</a>
+                                        <a class=""btn btn-sm btn-warning text-dark shadow-sm"" href=""/{model}/Edit/@item.Id"">ویرایش</a>
+                                        <a class=""btn btn-sm btn-danger shadow-sm"" href=""/{model}/Delete/@item.Id"">حذف</a>
+                                    </div>
+                                </td>
+                            </tr>
+                        }}
+                    </tbody>
+                </table>
+            </div>
+            
+            @if (ViewBag.TotalPages > 1)
+            {{
+                <div class=""d-flex justify-content-center p-3 border-top"">
+                    <nav aria-label=""Page navigation"">
+                        <ul class=""pagination mb-0"">
+                            @for (int i = 1; i <= ViewBag.TotalPages; i++)
+                            {{
+                                <li class=""page-item @(i == ViewBag.CurrentPage ? ""active"" : """")"">
+                                    <a class=""page-link"" href=""?search=@ViewBag.Search&page=@i"">@i</a>
+                                </li>
+                            }}
+                        </ul>
+                    </nav>
+                </div>
+            }}
+
+        </div>
+    </div>
+
+</div>
+";
+File.WriteAllText(Path.Combine(views,model,"Index.cshtml"),index);
+
+var form = $@"
+@using {modelProjectNamespace}
+@model {model}
+
+{commonStyles}
+
+<div class=""container py-5"" dir=""rtl"">
+    <div class=""row justify-content-center"">
+        <div class=""col-md-8"">
+            <div class=""card shadow-lg"">
+                <div class=""card-header bg-primary text-white p-4 border-0 rounded-top"">
+                    <h5 class=""mb-0 fw-bold"">ثبت / ویرایش اطلاعات {model}</h5>
+                </div>
+                <div class=""card-body p-4 p-md-5"">
+
+                    <form method=""post"">
+                        {inputs}
+
+                        <hr class=""my-4 text-muted"">
+                        <div class=""d-flex gap-2"">
+                            <button type=""submit"" class=""btn btn-success btn-lg px-5 shadow-sm"">ذخیره اطلاعات</button>
+                            <a class=""btn btn-light btn-lg border"" href=""/{model}"">بازگشت به لیست</a>
+                        </div>
+                    </form>
+
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+";
+File.WriteAllText(Path.Combine(views,model,"Create.cshtml"),form);
+File.WriteAllText(Path.Combine(views,model,"Edit.cshtml"),form);
+
+
+var detailsView = $@"
+@using {projectNamespace}.Helpers
+@model {modelProjectNamespace}.{model}
+
+{commonStyles}
+
+<div class=""container py-5"" dir=""rtl"">
+    <div class=""row justify-content-center"">
+        <div class=""col-md-10"">
+            <div class=""card shadow-lg"">
+                <div class=""card-header bg-info text-white p-4 border-0"">
+                    <h5 class=""mb-0 fw-bold""><i class=""bi bi-info-circle me-2""></i>جزئیات رکورد {model}</h5>
+                </div>
+                <div class=""card-body p-4 p-md-5"">
+                    
+                    <div class=""row"">
+                        <div class=""col-md-6 mb-3"">
+                            <div class=""p-3 border rounded bg-light hover-effect"">
+                                <small class=""text-muted d-block mb-1"">شناسه (Id)</small>
+                                <strong class=""fs-6 text-primary"">#@Model.Id</strong>
+                            </div>
+                        </div>
+                        {details}
+                    </div>
+
+                    <hr class=""my-4"">
+                    <div class=""d-flex gap-2"">
+                        <a class=""btn btn-warning px-4 shadow-sm"" href=""/{model}/Edit/@Model.Id"">ویرایش این رکورد</a>
+                        <a class=""btn btn-light border px-4"" href=""/{model}"">بازگشت</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+";
+File.WriteAllText(Path.Combine(views,model,"Details.cshtml"),detailsView);
+
+
+var deleteView = $@"
+@using {modelProjectNamespace}
+@model {model}
+
+{commonStyles}
+
+<div class=""container py-5"" dir=""rtl"">
+    <div class=""row justify-content-center"">
+        <div class=""col-md-6"">
+            <div class=""card shadow-lg border-danger border-top border-5"">
+                <div class=""card-body p-5 text-center"">
+                    <div class=""mb-4"">
+                        <div class=""rounded-circle bg-danger bg-opacity-10 d-inline-flex p-4"">
+                            <h1 class=""text-danger mb-0"">⚠</h1>
+                        </div>
+                    </div>
+                    <h4 class=""text-danger fw-bold mb-3"">حذف اطلاعات {model}</h4>
+                    <p class=""text-muted fs-5 mb-4"">آیا از حذف این رکورد (شناسه: @Model.Id) کاملاً اطمینان دارید؟ این عملیات قابل بازگشت نیست.</p>
+
+                    <form method=""post"" action=""/{model}/DeleteConfirmed/@Model.Id"">
+                        <div class=""d-flex justify-content-center gap-3"">
+                            <button type=""submit"" class=""btn btn-danger btn-lg px-5 shadow"">بله، حذف شود</button>
+                            <a class=""btn btn-light border btn-lg px-4"" href=""/{model}"">انصراف و بازگشت</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+";
+File.WriteAllText(Path.Combine(views,model,"Delete.cshtml"),deleteView);
+
+
+var importCsvView = $@"
+{commonStyles}
+
+<div class=""container py-5"" dir=""rtl"">
+    <div class=""row justify-content-center"">
+        <div class=""col-md-8"">
+            <div class=""card shadow-lg"">
+                <div class=""card-header bg-secondary text-white p-4 border-0"">
+                    <h5 class=""mb-0 fw-bold"">ایمپورت داده‌ها از فایل CSV ({model})</h5>
+                </div>
+                <div class=""card-body p-4 p-md-5"">
+                    
+                    <div class=""alert alert-info border-start border-info border-4 shadow-sm mb-4"">
+                        <h6 class=""alert-heading fw-bold"">راهنمای ایمپورت</h6>
+                        <p class=""mb-0"">دقت کنید که سطر اول فایل CSV حتماً باید شامل نام دقیق فیلدهای جدول (به انگلیسی) باشد. شناسه‌ها (Id) در نظر گرفته نمی‌شوند.</p>
+                    </div>
+
+                    <form method=""post"" enctype=""multipart/form-data"" action=""/{model}/ImportCsv"">
+                        <div class=""mb-4 p-4 border border-dashed rounded bg-light text-center hover-effect"">
+                            <label class=""form-label fw-bold d-block mb-3"">فایل CSV خود را انتخاب کنید</label>
+                            <input type=""file"" name=""file"" class=""form-control form-control-lg mx-auto"" style=""max-width: 400px;"" accept="".csv"" required />
+                        </div>
+                        
+                        <hr class=""my-4"">
+                        <div class=""d-flex gap-2"">
+                            <button type=""submit"" class=""btn btn-primary btn-lg px-5 shadow-sm"">شروع ایمپورت داده‌ها</button>
+                            <a class=""btn btn-light border btn-lg px-4"" href=""/{model}"">انصراف</a>
+                        </div>
+                    </form>
+
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+";
+File.WriteAllText(Path.Combine(views,model,"ImportCsv.cshtml"),importCsvView);
+
+di.AppendLine($"services.AddScoped<I{model}Repository, {model}Repository>();");
+di.AppendLine($"services.AddScoped<I{model}Service, {model}Service>();");
+
+}
+
+
+// --- تولید فایل پیکربندی XML برای منوها ---
+var xml = new StringBuilder();
+xml.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+xml.AppendLine("<AdminConfig>");
+xml.AppendLine("  <MenuItems>");
+xml.AppendLine("    <Menu Title=\"داشبورد\" Url=\"/Home/Index\" Icon=\"🏠\" />");
+foreach(var m in generatedModels)
+{
+    xml.AppendLine($"    <Menu Title=\"{m}\" Url=\"/{m}/Index\" Icon=\"📁\" />");
+}
+xml.AppendLine("  </MenuItems>");
+xml.AppendLine("</AdminConfig>");
+
+File.WriteAllText(Path.Combine(root, "admin-config.xml"), xml.ToString());
+// ------------------------------------------
+
+
+#>
+
+<#
+
+var diFile = $@"
+using Microsoft.Extensions.DependencyInjection;
+using {projectNamespace}.Repositories;
+using {projectNamespace}.Services;
+
+namespace {projectNamespace}
+{{
+    public static class DependencyInjectionGenerated
+    {{
+        public static IServiceCollection AddGeneratedServices(this IServiceCollection services)
+        {{
+
+{di.ToString()}
+
+            return services;
+        }}
+    }}
+}}
+";
+
+File.WriteAllText(Path.Combine(root,"DependencyInjection.Generated.cs"),diFile);
+
+#>
